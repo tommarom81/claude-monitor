@@ -1,0 +1,56 @@
+mini-s3-35: color fix, no-battery header, 6-screen usage dashboard
+Context
+mini-s3-35 (Guition JC3248W535C_I, 480×320 touchscreen, BOARD_MINI_S3_35) was just added to this firmware (commit 32720a0) and is mid-port (uncommitted changes in platformio.ini/src/ui.cpp add -DMANGO_UI and SX()/SY()/TS() scaling). It's USB-powered with no battery, so its header shows a permanently-stubbed -1% reading (halBatPercent(), hal.cpp:472-477). The user wants that replaced with the Wi-Fi network name and IP, the Clawd mascot showing orange instead of green, and — based on reference screenshots they provided (the README of benevid/claude-usage-stick-SVGL, a separate LVGL fork of this project) — a multi-screen dashboard replacing today's single static screen, drawn in this project's existing TFT_eSPI/Arduino_GFX style (this codebase intentionally doesn't use LVGL — README.md:88).
+
+Confirmed decisions: targets BOARD_MINI_S3_35 only (every other board keeps its battery reading and current UI untouched). Navigation is tap-zone paging — left half = previous screen, right half = next screen, reusing the touch-zone mechanism already proven for this board's PIN entry (hal.cpp:447-470) — rather than a tracked drag-swipe, because this board's redraw path does a full-frame software pixel rotate with no partial-update precedent. Usage meters fade orange → amber → red as a window fills.
+
+Step 0 (before any code change): the fallback snapshot
+The current firmware works and must stay recoverable. Build the current working tree as-is and save a flashable snapshot to a new top-level folder working-green-version-fallback/: firmware.bin, bootloader.bin, partitions.bin, boot_app0.bin, plus a RESTORE.md carrying the exact esptool command and flash offsets PlatformIO uses (one copy-paste restore, no rebuild), the current git hash (32720a0), a saved copy of the uncommitted platformio.ini/ui.cpp diff, and a note that reflashing firmware does not wipe NVS — the stored token, PIN and Wi-Fi credentials survive a restore. No git history is modified; this is purely additive files.
+
+Step 1: the green mascot is a byte-order bug, not a theme
+TFT_eSprite stores 16-bit pixels byte-swapped internally, but halFlush() (hal.cpp:492) pushes that buffer straight into panel->draw16bitRGBBitmap(), which expects native byte order. Claude orange 0xEB87 byte-swapped is 0x87EB — bright green. Symmetric colors (white 0xFFFF, black 0x0000) are unaffected, which is why only the orange elements look wrong today. Red C_CRIT 0xF800 is currently rendering as blue, amber C_WARN as blue-ish, and C_DIM gray as pale green.
+
+Fix: call panel->draw16bitBeRGBBitmap(0, 0, s_rotateBuf, 320, 480) — the big-endian variant already present in the vendored GFX 1.6.0 (lib/GFX_Library_for_Arduino/src/Arduino_GFX.h:269). One line, inside this board's own #ifdef block, so no other board is affected. This is a prerequisite for everything else about color: without it the planned orange→amber→red meters would render green→blue→blue.
+
+Per-model consumption: an experiment before that screen is built
+The user asked for consumption per model, not just up/down health. That data is not in what the device receives today: fetchUsage() collects only the four account-wide anthropic-ratelimit-unified-* headers (api.cpp:8-13) — "unified" means aggregated across models — and fetchModelStatus() is a keyword scan of the public status page (status.cpp:53-57), carrying no usage figures. Probing each model separately wouldn't help: the unified headers return the same account-wide numbers regardless of which model the probe names.
+
+So, before writing the MODELS screen, run a cheap experiment on the connected board: temporarily log every response header from one live fetchUsage() call over the OAuth path and check whether any per-model or per-bucket rate-limit headers (anthropic-ratelimit-tokens-*, anthropic-ratelimit-requests-*, …) arrive alongside the unified ones. One flash cycle answers it with facts.
+
+If per-model data exists → extend UsageData/fetchUsage() to capture it and build the MODELS screen around real per-model consumption bars.
+If it doesn't → MODELS ships as health/availability detail (all the reference fork's own Models screen shows either), and I report back the two real paths to true per-model consumption: (a) the Admin API usage report endpoint, which does return per-model token counts but needs a separate org-level Admin API key — not the Claude Code OAuth token this device stores, and unavailable on a personal Pro/Max plan; or (b) a companion process on a computer reading Claude Code's local session files and pushing them to the device (how the reference fork's "token bridge" works), which breaks this project's "no computer, no app, no cloud" premise. Both are separate features, not part of this change.
+Screens (six, tap-zone paging, dot indicator at the bottom)
+NOW — home, and it keeps what's on the current screen. Two side-by-side cards (5-HOUR / 7-DAY) with large percentage, segmented meter (orange→amber→red) and reset countdown, plus the existing MODELS breakdown retained along the bottom: the divider, the HAIKU/SONNET/OPUS/FABLE grid and the blinking overall-health Clawd — orange once Step 1 lands — reusing drawStatusPanel()/drawMascot()/uiBlinkTick() (ui.cpp:632-700) rather than reimplementing them. This is the same vertical split today's dashboard already uses (usage on top, models below), so it fits the 480×320 frame naturally.
+MODELS — full-screen expansion of that breakdown, with room the home screen can't give it: per-model consumption if the experiment above finds the data, otherwise per-model health detail.
+5-HOUR CHART — h5 across the current window (start → reset): solid line = real samples, dotted = linear projection at current burn rate, plus a plain-language verdict ("At current rate, runs out at 16:40" / "Won't run out before reset (~62%)").
+7-DAY CHART — the same treatment applied to d7 across the current weekly window, via one parameterized chart routine shared with screen 3 (field, window bounds, labels), not a second copy.
+24-HOUR RHYTHM — 24-bar histogram of quota burned per local hour of day, today, current hour highlighted.
+30-DAY CHART — 30 bars, one per calendar day, each that day's total quota burned.
+Screens 3–6 map 1:1 onto the four ranges originally asked for (5 hours, 24 hours, 7 days, 30 days), so each gets its own page — no period-selector tabs to hit on a touchscreen.
+
+Data model: one persisted ring buffer feeds every range
+New src/history_mini.h / src/history_mini.cpp, modeled directly on the proven pattern in src/history.cpp (magic+version header, absolute-index ring, gap-blanking after time away, write-only-on-slot-advance, oldest→newest snapshot reconstruction), with its own constants and file:
+
+HIST_MINI_SLOTS = 8640, HIST_MINI_SLOT_SEC = 300 — 5-minute samples across 30 days.
+Each slot stores {uint8_t h5; uint8_t d7;} (0xFF = empty), the same two-field shape as the existing HistSlot — ~17KB on the "spiffs" LittleFS partition this board already mounts. No platformio.ini change needed.
+Flash writes only when the 5-minute slot advances (~288/day — the same wear-irrelevant cadence class as the existing 336-slot history).
+historyMiniRecord(const UsageData&) called from refresh(), mirroring today's screensOnData()→historyRecord() call site.
+Every screen slices this one buffer at draw time: screens 3/4 plot a window directly; screens 5/6 walk the slice taking consecutive-sample deltas (clamped ≥0, a decrease meaning a window reset) into 24 hour-of-day buckets or 30 per-day buckets, computed in RAM at render time — no second persisted structure.
+The existing history.cpp/screens.cpp (DUST_UI boards) stay untouched — no shared code, no regression risk to other boards.
+
+Files touched
+src/hal.cpp — the one-line byte-order fix in halFlush() (Step 1). Nothing else.
+New src/history_mini.h/.cpp — as above, guarded #if defined(BOARD_MINI_S3_35).
+New src/screens_mini.h/.cpp — screen enum (MSCR_NOW, MSCR_MODELS, MSCR_CHART5H, MSCR_CHART7D, MSCR_RHYTHM24, MSCR_CHART30D, MSCR_COUNT), current-screen state, screensMiniInit/Show/Next/Prev/OnData, and a lightweight tick for the ago-timer. Mirrors src/screens.cpp's orchestration/drawing split, scoped to this board.
+src/ui.cpp — new #if defined(BOARD_MINI_S3_35) draw functions for the six screens (screen 1 composing the existing drawStatusPanel() beneath the new cards), plus one new shared header renderer: device label · SSID · IP on the left/middle, Wi-Fi signal icon + "Ns ago" timer kept on the right, no battery, dot-indicator strip along the bottom. This is a new header function, not an edit to drawHeaderRight() — so uiDashboard()/drawHeaderRight() stay byte-for-byte as they are for CrowPanel, M5StickC Plus and the rest; mini-s3-35 simply stops calling uiDashboard() once its own screen system takes over, exactly as DUST_UI boards already bypass it via screens.cpp.
+src/main.cpp — a third branch in refresh() (historyMiniRecord() + screensMiniOnData() instead of uiDashboard()); in setup(), cache WiFi.SSID() + WiFi.localIP().toString() (the pattern already at main.cpp:205) into the new header and call historyMiniInit()/screensMiniInit() before the first refresh(); in loop(), a #if defined(BOARD_MINI_S3_35) input block reusing the tap/hold gesture pattern proven in the DUST_UI block (main.cpp:309-359) — short tap LEFT/RIGHT = previous/next screen, long-press LEFT = brightness cycle, long-press RIGHT = force refresh (both preserving today's behavior) — and gate the existing mascot-blink block (main.cpp:380-399) to fire only while screen 1 is showing, the same guard DUST_UI already uses (screensCurrent() == SCR_DASH).
+No changes to hal.h, touch_axs15231b.h, config.h, history.cpp, screens.cpp, or platformio.ini beyond what's already uncommitted — the existing halBtnA/B tap+hold primitives already provide everything the gesture handling needs.
+Verification
+Step 0 fallback snapshot exists and its esptool restore command is recorded before any source edit.
+Flash Step 1 alone first and confirm on the real board that the Clawd mascot and header are orange, not green (this also validates the whole palette before any new screen is drawn).
+pio run -e mini-s3-35 compiles clean.
+Header-dump experiment flashed and its result recorded (decides the MODELS screen's content).
+pio run -e mini-s3-35 -t upload --upload-port COM6 — flash the real board.
+On-device: header shows SSID + IP with no battery icon/%; page 1 still shows the models breakdown with the Clawd blinking in orange; tapping left/right pages through all six screens and wraps; long-press left cycles brightness, long-press right forces a refresh; dot indicator tracks the current screen.
+Let it run past a 5-minute slot boundary, power-cycle, and confirm /hist_mini.bin persisted — charts still show pre-reboot data instead of starting empty.
+Regression check that other envs still build untouched: one DUST_UI env and one plain MANGO_UI env (e.g. the CrowPanel 3.5").

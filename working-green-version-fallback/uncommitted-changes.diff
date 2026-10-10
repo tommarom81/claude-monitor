@@ -1,0 +1,266 @@
+diff --git a/platformio.ini b/platformio.ini
+index bcdbd8c..859abd1 100644
+--- a/platformio.ini
++++ b/platformio.ini
+@@ -301,6 +301,7 @@ build_flags =
+     -DARDUINO_USB_MODE=1
+     -DDISABLE_ALL_LIBRARY_WARNINGS
+     -DCORE_DEBUG_LEVEL=1
++    -DMANGO_UI
+ 
+ ; Bring-up sketch for the board above — I2C scan, QSPI color bars, raw touch
+ ; coordinates. Exists to fail loudly on a wrong pin before it becomes a blank
+diff --git a/src/ui.cpp b/src/ui.cpp
+index fb05837..efabcb8 100644
+--- a/src/ui.cpp
++++ b/src/ui.cpp
+@@ -342,17 +342,19 @@ static uint16_t barColor(float) {
+ }
+ 
+ // Right-aligned reset countdown that rides on a usage bar's label row (the
+-// M5StickC Plus 240x135 layout). A fixed-width slot is cleared first so a shorter
+-// string (e.g. "59m" replacing "1h59m") leaves no trailing pixels when the 10s
+-// clock tick repaints it in place. Only ever called on the 240px panel, so the
+-// slot width is tuned for it. Templated like drawBar to bind to the real target.
++// M5StickC Plus 240x135 layout, also used by any other board sharing this
++// tier — e.g. mini-s3-35 — via SX()/SY()/TS(), identity on M5StickC Plus
++// itself). A fixed-width slot is cleared first so a shorter string (e.g.
++// "59m" replacing "1h59m") leaves no trailing pixels when the 10s clock tick
++// repaints it in place. Templated like drawBar to bind to the real target.
+ static const int RESET_SLOT_W = 42;
+ template <class GFX>
+ static void drawResetSlot(GFX& g, int barX, int barW, int y, const char* reset) {
+-    g.fillRect(barX + barW - RESET_SLOT_W, y, RESET_SLOT_W, 8, C_BG);
++    int slotW = SX(RESET_SLOT_W);
++    g.fillRect(barX + barW - slotW, y, slotW, SY(8), C_BG);
+     g.setTextColor(C_DIM, C_BG);
+-    g.setTextSize(1);
+-    g.setCursor(barX + barW - (int)strlen(reset) * 6, y);
++    g.setTextSize(TS(1));
++    g.setCursor(barX + barW - (int)strlen(reset) * TS(6), y);
+     g.print(reset);
+ }
+ 
+@@ -373,7 +375,7 @@ static void drawBar(GFX& g, int x, int y, int w, int h, float pct, const char* l
+     int pctRight = x + w;
+     if (reset) {
+         drawResetSlot(g, x, w, y, reset);
+-        pctRight = x + w - RESET_SLOT_W - TS(4);
++        pctRight = x + w - SX(RESET_SLOT_W) - TS(4);
+     }
+ 
+     char ps[8];
+@@ -402,6 +404,11 @@ void uiApplyRotation(bool flipped) {
+     halClear(C_BG);
+ }
+ 
++// Which model mascots render (panel setting) — shared by both tiers. Needs to
++// live outside the DUST_UI block below: drawStatusPanel()/uiBlinkTick() are
++// MANGO_UI-only, not DUST_UI-only, and mini-s3-35 is MANGO_UI without DUST_UI.
++static uint8_t s_mdlMask = 0x0F;
++
+ #ifdef DUST_UI
+ // The header's left text alternates between the device label and the panel URL
+ // on the 10s clock tick. Both strings print opaque at a fixed width so each
+@@ -426,8 +433,6 @@ void uiSetHeaderLabel(const char* name) {
+     for (char* p = s_hdrLabel; *p; p++) *p = toupper((unsigned char)*p);
+ }
+ 
+-// Which model mascots render (panel setting) — shared by both tiers.
+-static uint8_t s_mdlMask = 0x0F;
+ void uiSetModelMask(uint8_t mask) { s_mdlMask = mask & 0x0F ? mask & 0x0F : 0x0F; }
+ 
+ template <class GFX>
+@@ -593,7 +598,11 @@ void uiBlinkTick(bool closed) {
+ }
+ 
+ #else
+-// ── M5StickC Plus 240x135: one overall-health Clawd + a 2x2 text grid ───────
++// ── M5StickC Plus 240x135 tier: one overall-health Clawd + a 2x2 text grid ──
++// Coordinates sit in the same 240x135 base-unit space as the rest of the
++// dashboard and go through SX()/SY()/TS() — identity on M5StickC Plus itself
++// (where this tier was designed, so its rendering is unchanged), proportionally
++// scaled on any other board that shares this branch (currently mini-s3-35).
+ #define PANEL_MASCOT_S  2
+ #define PANEL_MASCOT_X  22
+ #define PANEL_MASCOT_Y  100
+@@ -607,15 +616,15 @@ void uiBlinkTick(bool closed) {
+ template <class GFX>
+ static void drawModelsDivider(GFX& g, int capY, int lineY) {
+     const char* cap = "MODELS";
+-    int capW = (int)strlen(cap) * 6;
++    int capW = (int)strlen(cap) * TS(6);
+     int cx   = SCREEN_W / 2;
+-    g.setTextSize(1);
++    g.setTextSize(TS(1));
+     g.setTextColor(C_DIM, C_BG);
+     g.setCursor(cx - capW / 2, capY);
+     g.print(cap);
+-    g.drawFastHLine(14, lineY, (cx - capW / 2 - 6) - 14, C_HEAD_DK);
+-    g.drawFastHLine(cx + capW / 2 + 6, lineY,
+-                    (SCREEN_W - 14) - (cx + capW / 2 + 6), C_HEAD_DK);
++    g.drawFastHLine(SX(14), lineY, (cx - capW / 2 - SX(6)) - SX(14), C_HEAD_DK);
++    g.drawFastHLine(cx + capW / 2 + SX(6), lineY,
++                    (SCREEN_W - SX(14)) - (cx + capW / 2 + SX(6)), C_HEAD_DK);
+ }
+ 
+ template <class GFX>
+@@ -623,7 +632,7 @@ static void drawStatusPanel(GFX& g) {
+     static const char* names[4] = {"HAIKU", "SONNET", "OPUS", "FABLE"};
+     bool up[4] = {s_modelStatus.haikuUp, s_modelStatus.sonnetUp,
+                   s_modelStatus.opusUp,  s_modelStatus.fableUp};
+-    drawModelsDivider(g, PANEL_CAP_Y, PANEL_LINE_Y);
++    drawModelsDivider(g, SY(PANEL_CAP_Y), SY(PANEL_LINE_Y));
+ 
+     // One Clawd to the left of the grid reflects overall health of the models
+     // the user shows: Claude orange when every one is up, gray with X-eyes if
+@@ -632,13 +641,14 @@ static void drawStatusPanel(GFX& g) {
+     for (int i = 0; i < 4; i++)
+         if (s_mdlMask & (1 << i)) anyDown = anyDown || !up[i];
+     bool dead = s_modelStatus.ok && anyDown;
+-    drawMascot(g, PANEL_MASCOT_X, PANEL_MASCOT_Y, 18 * PANEL_MASCOT_S, PANEL_MASCOT_S * 2,
++    drawMascot(g, SX(PANEL_MASCOT_X), SY(PANEL_MASCOT_Y),
++               SX(18 * PANEL_MASCOT_S), SY(PANEL_MASCOT_S * 2),
+                (!s_modelStatus.ok || dead) ? C_DIM : C_HEAD, dead);
+ 
+     // Grid packs the enabled models into consecutive slots.
+-    const int colX[2] = {PANEL_COL0_X, PANEL_COL1_X};
+-    const int rowY[2] = {PANEL_ROW0_Y, PANEL_ROW1_Y};
+-    g.setTextSize(1);
++    const int colX[2] = {SX(PANEL_COL0_X), SX(PANEL_COL1_X)};
++    const int rowY[2] = {SY(PANEL_ROW0_Y), SY(PANEL_ROW1_Y)};
++    g.setTextSize(TS(1));
+     int k = 0;
+     for (int i = 0; i < 4; i++) {
+         if (!(s_mdlMask & (1 << i))) continue;
+@@ -658,7 +668,7 @@ static void drawStatusPanel(GFX& g) {
+ 
+ // Blink the panel mascot's eyes — only when he's the healthy (orange) Clawd; the
+ // gray "something's down"/unknown Clawd stays still. Eyes go into the retained
+-// sprite and one push refreshes the panel (this tier is Dust-only now).
++// sprite and one push refreshes the panel.
+ void uiBlinkTick(bool closed) {
+     bool up[4] = {s_modelStatus.haikuUp, s_modelStatus.sonnetUp,
+                   s_modelStatus.opusUp,  s_modelStatus.fableUp};
+@@ -667,28 +677,36 @@ void uiBlinkTick(bool closed) {
+         if (s_mdlMask & (1 << i)) anyDown = anyDown || !up[i];
+     if (!s_modelStatus.ok || anyDown) return;
+ 
++#if defined(BOARD_CROWPANEL_ADV_35) || defined(DUST_UI)
+     auto& g = dashTarget();
+-    int ch = PANEL_MASCOT_S * 2;
+-    int ey = PANEL_MASCOT_Y + ch;   // eye row 1
++#else
++    auto& g = lcd;
++#endif
++    int ch = SY(PANEL_MASCOT_S * 2);
++    int ey = SY(PANEL_MASCOT_Y) + ch;   // eye row 1
++    int sxs = SX(PANEL_MASCOT_S);
+     for (int e = 0; e < 2; e++) {
+-        int ex = PANEL_MASCOT_X + CLAWD_EYE_COLS[e] * PANEL_MASCOT_S;
++        int ex = SX(PANEL_MASCOT_X) + CLAWD_EYE_COLS[e] * sxs;
+         if (closed) {
+-            g.fillRect(ex, ey, PANEL_MASCOT_S, ch, C_HEAD);           // lid down
+-            g.fillRect(ex, ey + ch / 2 - 1, PANEL_MASCOT_S, 2, C_BG); // shut line
++            g.fillRect(ex, ey, sxs, ch, C_HEAD);           // lid down
++            g.fillRect(ex, ey + ch / 2 - 1, sxs, 2, C_BG); // shut line
+         } else {
+-            g.fillRect(ex, ey, PANEL_MASCOT_S, ch, C_BG);            // eye open
++            g.fillRect(ex, ey, sxs, ch, C_BG);            // eye open
+         }
+     }
+     UI_PUSH_DASH();
+ }
+ #endif // BOARD_TDISPLAY_S3 four-mascot row vs M5StickC Plus status panel
+ 
++// Coordinates are in the same 240x135 base-unit space as the rest of the
++// dashboard and go through SX()/SY()/TS() — identity on the boards this tier
++// was designed for, proportionally scaled on larger panels (mini-s3-35).
+ template <class GFX>
+ static void drawWifiIcon(GFX& g, int x, int rssi) {
+     int level = (rssi >= -55) ? 4 : (rssi >= -65) ? 3 : (rssi >= -75) ? 2 : (rssi >= -85) ? 1 : 0;
+     for (int i = 0; i < 4; i++) {
+-        int h = 3 * (i + 1);
+-        g.fillRect(x + i * 4, 14 - h, 3, h, (level > i) ? C_TEXT : C_HEAD_DK);
++        int h = SY(3 * (i + 1));
++        g.fillRect(x + i * SX(4), SY(14) - h, SX(3), h, (level > i) ? C_TEXT : C_HEAD_DK);
+     }
+ }
+ 
+@@ -698,26 +716,26 @@ static void drawWifiIcon(GFX& g, int x, int rssi) {
+ template <class GFX>
+ static void drawHeaderRight(GFX& g, int rssi, unsigned long ago, int batPct) {
+     g.setTextColor(C_TEXT, C_HEAD);
+-    g.setTextSize(1);
++    g.setTextSize(TS(1));
+ 
+     char ps[8];
+     snprintf(ps, sizeof(ps), "%d%%", batPct);
+-    int x = SCREEN_W - 4 - (int)strlen(ps) * 6;
+-    g.setCursor(x, 5);
++    int x = SCREEN_W - SX(4) - (int)strlen(ps) * TS(6);
++    g.setCursor(x, SY(5));
+     g.print(ps);
+ 
+-    x -= 24;   // battery: 18 body + 2 nub + 4 gap before the text
+-    g.drawRect(x, 4, 18, 10, C_TEXT);
+-    g.fillRect(x + 18, 7, 2, 4, C_TEXT);
+-    int fw = 14 * constrain(batPct, 0, 100) / 100;
+-    if (fw > 0) g.fillRect(x + 2, 6, fw, 6, C_TEXT);
++    x -= SX(24);   // battery: 18 body + 2 nub + 4 gap before the text
++    g.drawRect(x, SY(4), SX(18), SY(10), C_TEXT);
++    g.fillRect(x + SX(18), SY(7), SX(2), SY(4), C_TEXT);
++    int fw = SX(14) * constrain(batPct, 0, 100) / 100;
++    if (fw > 0) g.fillRect(x + SX(2), SY(6), fw, SY(6), C_TEXT);
+ 
+-    x -= 21;   // wifi: 15 wide + 6 gap
++    x -= SX(21);   // wifi: 15 wide + 6 gap
+     drawWifiIcon(g, x, rssi);
+ 
+     char as[12];
+     snprintf(as, sizeof(as), "%lus", ago);
+-    g.setCursor(x - 6 - (int)strlen(as) * 6, 5);
++    g.setCursor(x - SX(6) - (int)strlen(as) * TS(6), SY(5));
+     g.print(as);
+ }
+ #endif // MANGO_UI
+@@ -1046,17 +1064,18 @@ void uiPinScreen(int pos, const int digits[4]) {
+ 
+ #ifdef MANGO_UI
+     // Same dress code as the dashboard: orange header band + Clawd standing guard.
+-    // Label/hint/note positions hang off boxY so the block stays centered on both
+-    // the 320x170 (S3) and 240x135 (M5StickC Plus) panels.
+-    g.fillRect(0, 0, SCREEN_W, 18, C_HEAD);
++    // Label/hint/note positions hang off boxY so the block stays centered on the
++    // 320x170 (S3), 240x135 (M5StickC Plus) and 480x320 (mini-s3-35) panels alike
++    // — SX()/SY()/TS() are identity on the first two, proportional on the third.
++    g.fillRect(0, 0, SCREEN_W, SY(18), C_HEAD);
+     g.setTextColor(C_TEXT, C_HEAD);
+-    g.setTextSize(1);
+-    g.setCursor(4, 5);
++    g.setTextSize(TS(1));
++    g.setCursor(SX(4), SY(5));
+     g.print("CLAUDE USAGE");
+-    g.setCursor(SCREEN_W - 4 - 6 * 6, 5);
++    g.setCursor(SCREEN_W - SX(4) - 6 * TS(6), SY(5));
+     g.print("LOCKED");
+     g.setTextColor(C_DIM, C_BG);
+-    g.setCursor((SCREEN_W - 10 * 6) / 2, boxY - 18);
++    g.setCursor((SCREEN_W - 10 * TS(6)) / 2, boxY - SY(18));
+     g.print("UNLOCK PIN");
+ #else
+     g.setTextColor(C_DIM, C_BG);
+@@ -1220,10 +1239,10 @@ void uiDashboard(const UsageData& data, unsigned long lastFetchMs, int rssi, int
+         g.setCursor(SX(10), SY(60));
+         g.print(data.error);
+         g.setCursor(SX(10), SY(80));
+-#ifdef MANGO_UI
+-        g.print("retrying automatically...");   // B is brightness on this board
++#if defined(MANGO_UI) && defined(DUST_UI)
++        g.print("retrying automatically...");   // B is brightness on Dust boards
+ #else
+-        g.print("[B] retry now");
++        g.print("[B] retry now");   // B still force-refreshes without DUST_UI's remap
+ #endif
+         UI_PUSH_DASH();
+         return;

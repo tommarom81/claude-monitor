@@ -1,0 +1,42 @@
+# Secrets
+.mcp.json
+.env
+*.pem
+*.key
+
+# Vendor SDK dump (not project code)
+cp1255/
+
+# PlatformIO
+.pio/
+.pioenvs/
+.piolibdeps/
+.clang_complete
+.gcc-flags.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# Node / web
+node_modules/
+dist/
+web/dist/
+web/build/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

@@ -1,0 +1,479 @@
+/*
+ * Claude Code Usage Monitor — Standalone WiFi
+ * Supports: M5StickC Plus, M5StickC Plus2, LilyGo T-Display S3, ESP32-C3-OLED
+ *
+ * PIN entry: A cycles the digit, B confirms
+ * Dashboard (Clarity): A cycles brightness, B forces a refresh
+ * Screens (Dust):      A tap = next screen, A held = flip, B = brightness,
+ *                      A+B = force refresh
+ * A+B held on boot: factory reset → wipe NVS → re-enter setup
+ *
+ * Boot order differs per board: DUST_UI boards bring WiFi up before the PIN
+ * (the LAN address is shown while locked, and a failed connect falls back to a
+ * WiFi-reconfigure portal); every other board keeps the PIN-first order.
+ *
+ * ESP32-C3-OLED wiring (both buttons external, active-LOW to GND):
+ *   Button A → GPIO 3     Button B → GPIO 7
+ *   SDA → GPIO 5          SCL → GPIO 6
+ *   GPIO 9 (BO0): download mode only — do NOT wire a button here
+ */
+
+#include "hal.h"
+#include <WiFi.h>
+#include "config.h"
+#include "crypto.h"
+#include "settings.h"
+#include "app_state.h"
+#include "provision.h"
+#include "api.h"
+#include "ui.h"
+#include "panel.h"
+#include "screens.h"
+#include "screens_mini.h"
+#include "history.h"
+#include "history_mini.h"
+#include "news.h"
+#ifdef MANGO_UI
+#include "status.h"
+#endif
+
+Settings      g_settings;
+UsageData     g_usage;
+#ifdef MANGO_UI
+ModelStatus   g_models = {true, true, true, true, false};
+#endif
+char          g_token[256];
+bool          g_unlocked = false;
+unsigned long g_lastFetchMs = 0;
+
+// ── PIN Entry (blocks until 4 digits confirmed) ────────
+// Returns false if a web login unlocked the device mid-entry (T-Display S3):
+// the token is already in g_token and the caller should skip its own decrypt.
+static bool enterPin(char* pinOut, int maxLen) {
+    int digits[4] = {0, 0, 0, 0};
+    int pos = 0;
+
+    while (pos < 4) {
+        uiPinScreen(pos, digits);
+        while (true) {
+            halUpdate();
+#ifdef DUST_UI
+            panelService();
+            if (panelUnlockPending()) return false;
+#endif
+            if (halBtnAWasPressed()) { digits[pos] = (digits[pos] + 1) % 10; break; }
+            if (halBtnBWasPressed()) { pos++; break; }
+            delay(20);
+        }
+    }
+    snprintf(pinOut, maxLen, "%d%d%d%d", digits[0], digits[1], digits[2], digits[3]);
+    return true;
+}
+
+// ── WiFi ───────────────────────────────────────────────
+static bool connectWiFi(const char* ssid, const char* pass) {
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid, pass);
+    int ticks = 0;
+    while (WiFi.status() != WL_CONNECTED) {
+        ticks++;
+        uiConnecting(ssid, ticks / 2);
+        delay(500);
+        if (ticks > WIFI_CONNECT_TIMEOUT_S * 2) return false;
+    }
+    return true;
+}
+
+// ── Setup-AP credentials (also used by the WiFi recovery portal) ──
+static void makeApCreds(char* apName, size_t nameLen, char* apPass, size_t passLen) {
+    uint8_t mac[6];
+    esp_efuse_mac_get_default(mac);
+    snprintf(apName, nameLen, "ClaudeMonitor-%02X%02X", mac[4], mac[5]);
+
+#ifdef BOARD_ESP32C3_OLED
+    // No readable display during setup — use open AP so password isn't needed
+    apPass[0] = '\0';
+    Serial.printf("[SETUP] AP: %s (open)\n", apName);
+#else
+    static const char alphabet[] = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    uint8_t rnd[8];
+    esp_fill_random(rnd, sizeof(rnd));
+    size_t n = (passLen > 9) ? 8 : passLen - 1;
+    for (size_t i = 0; i < n; i++) apPass[i] = alphabet[rnd[i] % (sizeof(alphabet) - 1)];
+    apPass[n] = '\0';
+#endif
+}
+
+// ── Sync NTP for reset countdown display ───────────────
+static void syncTime() {
+    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+    struct tm t;
+    getLocalTime(&t, 5000);
+}
+
+// ── Fetch + draw ───────────────────────────────────────
+static void refresh() {
+    if (WiFi.status() != WL_CONNECTED) {
+        connectWiFi(g_settings.ssid, g_settings.wifipass);
+    }
+    fetchUsage(g_token, g_usage);
+#ifdef MANGO_UI
+    fetchModelStatus(g_models);   // failure keeps last-known state
+    uiSetModelStatus(g_models);
+#endif
+    g_lastFetchMs = millis();
+#if defined(BOARD_MINI_S3_35)
+    screensMiniOnData();   // records mini history + redraws whichever screen shows it
+#elif defined(DUST_UI)
+    screensOnData();   // records history + redraws whichever screen shows it
+#else
+    uiDashboard(g_usage, g_lastFetchMs, WiFi.RSSI(), halBatPercent());
+#endif
+}
+
+// ── Boot phases ────────────────────────────────────────
+// PIN + decrypt loop: 10 attempts wipe the credentials, lockout doubles.
+static void unlockPhase(int progressPct) {
+    uiBootProgress(progressPct, "Enter PIN...");
+    delay(300);
+
+    int attempts = 0;
+    bool webUnlocked = false;
+    while (attempts < MAX_PIN_ATTEMPTS && !webUnlocked) {
+        char pin[9];
+        if (!enterPin(pin, sizeof(pin))) { webUnlocked = true; break; }
+
+        if (decryptToken(g_settings.blob, pin, g_token, sizeof(g_token))) break;
+
+        attempts++;
+        if (attempts >= MAX_PIN_ATTEMPTS) {
+            uiError("MAX ATTEMPTS", "Wiping credentials...");
+            settingsWipeAll();
+            delay(3000);
+            ESP.restart();
+        }
+
+        int lockSec = LOCKOUT_BASE_SEC * (1 << (attempts - 1));
+        if (lockSec > 3600) lockSec = 3600;
+        uiLockoutStatic(attempts, MAX_PIN_ATTEMPTS, lockSec);
+        // The device lockout governs the buttons only; the web login keeps its
+        // own throttle and stays reachable through the countdown.
+        for (int s = lockSec; s > 0 && !webUnlocked; s--) {
+            uiLockoutTick(s);
+            for (int slice = 0; slice < 50; slice++) {
+#ifdef DUST_UI
+                panelService();
+                if (panelUnlockPending()) { webUnlocked = true; break; }
+#endif
+                delay(20);
+            }
+        }
+    }
+#ifdef DUST_UI
+    panelConsumeUnlock();
+#endif
+    g_unlocked = true;
+    // Drain stray button edges so nothing phantom-taps the dashboard.
+    halUpdate();
+    halBtnAWasPressed();
+    halBtnBWasPressed();
+}
+
+#ifdef DUST_UI
+// WiFi before the PIN on this board: the creds need no PIN, and the device's
+// LAN address is already known (and shown) while it sits locked. A dead network
+// lands in the reconfigure portal instead of the old infinite reboot loop.
+static void netPhase() {
+    char host[33];
+    slugifyHostname(g_settings.devName, host, sizeof(host));
+    WiFi.mode(WIFI_STA);
+    WiFi.setHostname(host);   // must precede WiFi.begin to land in the DHCP lease
+
+    uiBootProgress(60, "Connecting WiFi...");
+    int tries = 0;
+    while (!connectWiFi(g_settings.ssid, g_settings.wifipass)) {
+        if (++tries >= 3) {
+            char apName[24], apPass[9];
+            makeApCreds(apName, sizeof(apName), apPass, sizeof(apPass));
+            runProvisioningPortal(apName, apPass, true);   // never returns
+        }
+        uiError("WIFI FAILED", "Retrying...");
+        delay(2000);
+    }
+
+    uiBootProgress(70, "Syncing time...");
+    syncTime();
+    settingsApplyTZ(g_settings.tzMin);
+
+    char url[40];
+    snprintf(url, sizeof(url), "http://%s", WiFi.localIP().toString().c_str());
+    uiSetNetInfo(url);
+    uiSetHeaderLabel(g_settings.devName);
+    panelBegin(host);
+}
+#else
+static void netPhaseLegacy() {
+    uiBootProgress(80, "Connecting WiFi...");
+    if (!connectWiFi(g_settings.ssid, g_settings.wifipass)) {
+        uiError("WIFI FAILED", g_settings.ssid);
+        delay(5000);
+        ESP.restart();
+    }
+
+    uiBootProgress(90, "Syncing time...");
+    syncTime();
+    settingsApplyTZ(g_settings.tzMin);
+}
+#endif
+
+// ── Setup ──────────────────────────────────────────────
+void setup() {
+    halInit();
+    uiInit();
+
+    uiBootProgress(10, "Initializing...");
+    delay(300);
+
+    uiBootProgress(30, "Checking config...");
+    delay(200);
+
+    // Factory reset: both buttons must be held continuously for 2 seconds.
+    // A single snapshot can mis-fire on boards where GPIOs float LOW briefly;
+    // repeated sampling over 2 s eliminates false triggers.
+    halUpdate();
+    if (halBtnAIsPressed() && halBtnBIsPressed()) {
+        uiBootProgress(40, "Hold A+B 2s...");
+        bool held = true;
+        for (int i = 0; i < 20 && held; i++) {
+            delay(100);
+            halUpdate();
+            if (!halBtnAIsPressed() || !halBtnBIsPressed()) held = false;
+        }
+        if (held) {
+            uiBootProgress(50, "Factory reset...");
+            settingsWipeAll();
+            uiError("NVS WIPED", "Rebooting in 2s...");
+            delay(2000);
+            ESP.restart();
+        }
+    }
+
+    if (!settingsIsProvisioned()) {
+        uiBootProgress(50, "No config found");
+        delay(400);
+
+        char apName[24], apPass[9];
+        makeApCreds(apName, sizeof(apName), apPass, sizeof(apPass));
+        runProvisioningPortal(apName, apPass);
+        return;
+    }
+
+    uiBootProgress(50, "Config loaded");
+    delay(200);
+
+    settingsLoad(g_settings);
+    halSetBrightness(g_settings.brightness);
+#ifdef MANGO_UI
+    if (g_settings.flip) uiApplyRotation(true);
+#endif
+
+#ifdef DUST_UI
+    netPhase();
+    uiBootProgress(78, "Preparing storage...");
+    historyInit();   // first boot formats the data partition (~1-3s)
+    unlockPhase(85);
+    screensInit();
+#else
+    unlockPhase(60);
+#if defined(BOARD_MINI_S3_35)
+    // This board's Serial is the native USB-Serial-JTAG peripheral
+    // (ARDUINO_USB_MODE=1) — it needs an explicit begin() to transmit at all,
+    // unlike a UART-bridge board where the IDF console UART is already live
+    // at boot. Kept on (not just a debug-only addition) since this board had
+    // no working serial diagnostics at all before.
+    Serial.begin(115200);
+#endif
+    netPhaseLegacy();
+#if defined(BOARD_MINI_S3_35)
+    {
+        char ip[40];
+        snprintf(ip, sizeof(ip), "%s", WiFi.localIP().toString().c_str());
+        screensMiniInit(ip);
+    }
+#endif
+#endif
+
+    uiBootProgress(95, "Fetching usage...");
+    refresh();
+}
+
+// ── Loop ───────────────────────────────────────────────
+void loop() {
+    halUpdate();
+
+#ifdef DUST_UI
+    panelService();
+    panelConsumeUnlock();   // post-boot logins don't need the boot-phase handoff
+    uint8_t acts = panelTakeAction();
+    if (acts & PANEL_ACT_FACTORY_RESET) {
+        historyErase();
+        settingsWipeAll();
+        ESP.restart();
+    }
+    if (acts & PANEL_ACT_REBOOT) ESP.restart();
+    if (acts & PANEL_ACT_REFRESH) refresh();
+    if (acts & (PANEL_ACT_REDRAW | PANEL_ACT_FLIP)) screensOnSettings();
+#endif
+
+#if defined(BOARD_MINI_S3_35)
+    // Tap-zone paging: short tap LEFT/RIGHT = previous/next screen, long-press
+    // LEFT = brightness cycle, long-press RIGHT = force refresh. No A+B combo
+    // here — the touch controller reports one point per interrupt (hal.cpp),
+    // so each zone's tap/hold is tracked independently rather than as a combo.
+    {
+        static unsigned long aDownAt = 0, bDownAt = 0;
+        static bool aLong = false, bLong = false;
+        bool aEdge = halBtnAWasPressed();
+        bool bEdge = halBtnBWasPressed();
+        bool aHeld = halBtnAIsPressed();
+        bool bHeld = halBtnBIsPressed();
+
+        if (aEdge) { aDownAt = millis(); aLong = false; }
+        if (aDownAt) {
+            if (!aLong && aHeld && millis() - aDownAt >= 600) {
+                aLong = true;
+                g_settings.brightness = (g_settings.brightness + 1) % 4;
+                halSetBrightness(g_settings.brightness);
+                settingsPutInt("brightness", g_settings.brightness);
+            }
+            if (!aHeld) {
+                if (!aLong) screensMiniPrev();
+                aDownAt = 0;
+            }
+        }
+
+        if (bEdge) { bDownAt = millis(); bLong = false; }
+        if (bDownAt) {
+            if (!bLong && bHeld && millis() - bDownAt >= 600) {
+                bLong = true;
+                refresh();
+            }
+            if (!bHeld) {
+                if (!bLong) screensMiniNext();
+                bDownAt = 0;
+            }
+        }
+    }
+#elif defined(DUST_UI)
+    // A short = next screen · A held ≥600ms = flip · B = brightness ·
+    // A+B = force refresh. Latches keep each gesture firing exactly once;
+    // every gesture pauses the carousel for 10s.
+    {
+        static unsigned long aDownAt = 0, bPressAt = 0;
+        static bool aLong = false, aCombo = false;
+        bool aEdge = halBtnAWasPressed();
+        bool bEdge = halBtnBWasPressed();
+        bool aHeld = halBtnAIsPressed();
+        bool bHeld = halBtnBIsPressed();
+
+        if (aEdge) { aDownAt = millis(); aLong = false; aCombo = false; }
+        if (aDownAt) {
+            if (!aCombo && !aLong && (bEdge || bHeld)) {
+                aCombo = true;
+                bPressAt = 0;
+                screensPause(10000);
+                refresh();
+            } else if (!aCombo && !aLong && aHeld && millis() - aDownAt >= 600) {
+                aLong = true;
+                g_settings.flip = !g_settings.flip;
+                settingsPutU8("flip", g_settings.flip);
+                screensPause(10000);
+                screensOnSettings();   // applies rotation + redraws
+            }
+            if (!aHeld) {
+                if (!aLong && !aCombo && millis() - aDownAt < 600) {
+                    screensPause(10000);
+                    screensNext();
+                }
+                aDownAt = 0;
+            }
+        } else if (bEdge) {
+            bPressAt = millis();
+        }
+        if (bPressAt) {
+            if (aHeld || aEdge) {   // A joined a pending B press — combo
+                bPressAt = 0;
+                aDownAt = 0;        // consume A so release doesn't also advance
+                screensPause(10000);
+                refresh();
+            } else if (millis() - bPressAt > 350) {
+                bPressAt = 0;
+                g_settings.brightness = (g_settings.brightness + 1) % 4;
+                halSetBrightness(g_settings.brightness);
+                settingsPutInt("brightness", g_settings.brightness);
+                screensPause(10000);
+            }
+        }
+    }
+#else
+    if (halBtnAWasPressed()) {
+#ifdef BOARD_ESP32C3_OLED
+        g_settings.brightness = (g_settings.brightness + 1) % 2; // on/off only — contrast change imperceptible
+#else
+        g_settings.brightness = (g_settings.brightness + 1) % 4;
+#endif
+        halSetBrightness(g_settings.brightness);
+        settingsPutInt("brightness", g_settings.brightness);
+    }
+
+    if (halBtnBWasPressed()) {
+        refresh();
+    }
+#endif
+
+    if (millis() - g_lastFetchMs >= (unsigned long)g_settings.pollSec * 1000UL) {
+        refresh();
+    }
+
+#ifdef MANGO_UI
+    // Healthy mascots blink every 2s (eyes shut for 150ms) to show liveness.
+    static unsigned long lastBlink = 0;
+    static bool eyesClosed = false;
+#if defined(BOARD_MINI_S3_35)
+    // Blinking draws at mascot coordinates — only valid on the NOW screen.
+    bool blinkScreen = screensMiniCurrent() == MSCR_NOW;
+    if (!blinkScreen) eyesClosed = false;   // a screen change redrew them open
+#elif defined(DUST_UI)
+    // Blinking draws at mascot coordinates — only valid on the dashboard.
+    bool blinkScreen = screensCurrent() == SCR_DASH;
+    if (!blinkScreen) eyesClosed = false;   // a screen change redrew them open
+#else
+    const bool blinkScreen = true;
+#endif
+    if (blinkScreen && eyesClosed && millis() - lastBlink > 150) {
+        uiBlinkTick(false);
+        eyesClosed = false;
+    } else if (blinkScreen && !eyesClosed && g_usage.ok && millis() - lastBlink > 2000) {
+        uiBlinkTick(true);
+        eyesClosed = true;
+        lastBlink = millis();
+    }
+#endif
+
+#if defined(BOARD_MINI_S3_35)
+    screensMiniTick();                    // 10s ago-timer header beat
+#elif defined(DUST_UI)
+    screensTick();                        // carousel dwell + 10s header beat + clock minute
+    if (newsTick()) screensOnNews();      // blocks 2-5s only when a fetch is due
+#else
+    static unsigned long lastRedraw = 0;
+    if (millis() - lastRedraw > 10000) {
+        // Only time passed (not data) — update the clock/countdowns in place; redrawing
+        // the whole dashboard here is what made the slow CrowPanel panel flicker.
+        uiDashboardClock(g_usage, g_lastFetchMs, WiFi.RSSI());
+        lastRedraw = millis();
+    }
+#endif
+
+    delay(20);
+}
