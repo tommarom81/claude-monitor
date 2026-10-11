@@ -21,6 +21,9 @@
   #include <Wire.h>
   #include <TAMC_GT911.h>
   extern TFT_eSPI lcd;
+#elif defined(BOARD_CROWPANEL_35)
+  #include <TFT_eSPI.h>   // XPT2046 touch is driven by TFT_eSPI itself (TOUCH_CS)
+  extern TFT_eSPI lcd;
 #elif defined(BOARD_TDISPLAY_S3_AMOLED)
   #include <LilyGo_AMOLED.h>
   #include <TFT_eSPI.h>

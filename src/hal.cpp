@@ -373,6 +373,68 @@ void halFlush() {}
 
 void halClear(uint16_t color) { lcd.fillScreen(color); }
 
+#elif defined(BOARD_CROWPANEL_35)
+
+// Elecrow CrowPanel ESP32 Display 3.5" HMI — the basic (non-Advance) model: classic
+// ESP32-WROVER-B, the same 480x320 ILI9488 panel as the Advance, but resistive XPT2046
+// touch sharing the display's HSPI bus (TOUCH_CS in platformio.ini) and backlight on 27.
+// Same two touch zones as the Advance: LEFT half = Button A, RIGHT half = Button B.
+// Only a left/right split is needed, so raw XPT2046 readings are used — no calibration.
+// Build with -DCROWPANEL_TOUCH_DEBUG to log PSRAM size and raw touch points on serial.
+TFT_eSPI lcd;
+
+#define BL_PIN          27
+#define TOUCH_Z_MIN     400    // pressure above this counts as a touch
+#define TOUCH_RAW_MID   2048   // midpoint of the 12-bit raw axis
+
+static bool prevTouch = false;
+static bool tapA = false, tapB = false;
+static bool downA = false, downB = false;
+
+void halInit() {
+#ifdef CROWPANEL_TOUCH_DEBUG
+    Serial.begin(115200);
+    Serial.printf("PSRAM: %u bytes\n", ESP.getPsramSize());
+#endif
+    lcd.init();
+    ledcSetup(0, 5000, 8);
+    ledcAttachPin(BL_PIN, 0);
+    ledcWrite(0, 200);
+}
+
+void halUpdate() {
+    bool down = lcd.getTouchRawZ() > TOUCH_Z_MIN;   // ~20 idle, ~3000 pressed
+    if (down && !prevTouch) {                          // new finger press (rising edge)
+        uint16_t rx, ry;
+        lcd.getTouchRaw(&rx, &ry);
+#ifdef CROWPANEL_TOUCH_DEBUG
+        Serial.printf("touch raw x=%u y=%u\n", rx, ry);
+#endif
+        // Raw y runs along the long (horizontal in landscape) axis: ~450 at the left
+        // edge, ~3650 at the right (measured on hardware).
+        if (ry < TOUCH_RAW_MID) { tapA = true; downA = true; downB = false; }   // left half
+        else                    { tapB = true; downB = true; downA = false; }   // right half
+    }
+    if (!down) { downA = false; downB = false; }
+    prevTouch = down;
+}
+
+bool halBtnAWasPressed() { bool r = tapA; tapA = false; return r; }
+bool halBtnBWasPressed() { bool r = tapB; tapB = false; return r; }
+bool halBtnAIsPressed()  { return downA; }
+bool halBtnBIsPressed()  { return downB; }
+
+int halBatPercent() { return -1; }  // no battery-sense ADC on this board
+
+void halSetBrightness(uint8_t level) {
+    static const uint8_t vals[] = {0, 60, 160, 255};
+    ledcWrite(0, vals[level]);
+}
+
+void halFlush() {}
+
+void halClear(uint16_t color) { lcd.fillScreen(color); }
+
 #elif defined(BOARD_MINI_S3_35)
 
 // Guition/stemedu JC3248W535C_I "Mini ESP32-S3 3.5"" — AXS15231B panel driven over

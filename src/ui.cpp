@@ -305,7 +305,7 @@ void uiDashboardClock(const UsageData& data, unsigned long lastFetchMs, int rssi
   #define TS(n) ((n) * 2)
   #define SX(n) ((n) * 2)
   #define SY(n) ((n) * 2)
-#elif defined(BOARD_CROWPANEL_ADV_35) || defined(BOARD_MINI_S3_35)
+#elif defined(BOARD_CROWPANEL_ADV_35) || defined(BOARD_CROWPANEL_35) || defined(BOARD_MINI_S3_35)
   // 480x320 panel — 2x font, with coordinates stretched to fill the whole screen
   // (~2x across, ~2.37x down) so the dashboard spreads over the full height
   // instead of bunching up at the top.
@@ -318,7 +318,7 @@ void uiDashboardClock(const UsageData& data, unsigned long lastFetchMs, int rssi
   #define SY(n) (n)
 #endif
 
-#if defined(BOARD_CROWPANEL_ADV_35) || defined(DUST_UI)
+#if defined(BOARD_CROWPANEL_ADV_35) || defined(BOARD_CROWPANEL_35) || defined(DUST_UI)
 // The CrowPanel's ILI9488 is too slow to clear-then-redraw on screen without flicker,
 // and the T-Display S3's v3 screen carousel would flash on every transition.
 // The dashboard (and the S3's other screens) render into an off-screen sprite (PSRAM)
@@ -677,7 +677,7 @@ void uiBlinkTick(bool closed) {
         if (s_mdlMask & (1 << i)) anyDown = anyDown || !up[i];
     if (!s_modelStatus.ok || anyDown) return;
 
-#if defined(BOARD_CROWPANEL_ADV_35) || defined(DUST_UI)
+#if defined(BOARD_CROWPANEL_ADV_35) || defined(BOARD_CROWPANEL_35) || defined(DUST_UI)
     auto& g = dashTarget();
 #else
     auto& g = lcd;
@@ -1504,7 +1504,7 @@ void uiSetupScreen(const char* apName, const char* apPass, bool reconfigure) {
 }
 
 void uiPinScreen(int pos, const int digits[4]) {
-#ifdef BOARD_CROWPANEL_ADV_35
+#if defined(BOARD_CROWPANEL_ADV_35) || defined(BOARD_CROWPANEL_35)
     auto& g = dashTarget();
     g.fillSprite(C_BG);
 #else
@@ -1579,7 +1579,7 @@ void uiPinScreen(int pos, const int digits[4]) {
     g.setTextColor(0x4A49, C_BG);
     g.print("short tap = A    long press = B");
     halFlush();
-#elif defined(BOARD_CROWPANEL_ADV_35)
+#elif defined(BOARD_CROWPANEL_ADV_35) || defined(BOARD_CROWPANEL_35)
     // Touch HMI — stack the hints vertically; the side-by-side layout overflows at this scale.
     g.print("tap LEFT  = next digit");
     g.setCursor(SX(20), SY(110));
@@ -1658,7 +1658,7 @@ void uiConnecting(const char* ssid, int attempt) {
 }
 
 void uiDashboard(const UsageData& data, unsigned long lastFetchMs, int rssi, int batPct) {
-#if defined(BOARD_CROWPANEL_ADV_35) || defined(DUST_UI)
+#if defined(BOARD_CROWPANEL_ADV_35) || defined(BOARD_CROWPANEL_35) || defined(DUST_UI)
     auto& g = dashTarget();
     g.fillSprite(C_BG);
 #else
@@ -1757,7 +1757,7 @@ void uiDashboard(const UsageData& data, unsigned long lastFetchMs, int rssi, int
 
 void uiDashboardClock(const UsageData& data, unsigned long lastFetchMs, int rssi) {
     if (!data.ok) return;   // error layout is owned by the full uiDashboard
-#if defined(BOARD_CROWPANEL_ADV_35) || defined(DUST_UI)
+#if defined(BOARD_CROWPANEL_ADV_35) || defined(BOARD_CROWPANEL_35) || defined(DUST_UI)
     auto& g = dashTarget();   // update the retained sprite, then push it once
 #else
     auto& g = lcd;
