@@ -38,6 +38,11 @@ void uiChartScreen(const HistSlot* slots, uint32_t newestEpoch,
 void uiNewsScreen(const NewsState& news, unsigned long lastFetchMs, int rssi);
 void uiClockScreen(const UsageData& data, unsigned long lastFetchMs, int rssi);
 #endif
+#if defined(BOARD_CROWPANEL_ADV_35) || defined(BOARD_CROWPANEL_35)
+// LAN IP shown in the dashboard header in place of the static "CLAUDE USAGE"
+// label, cached once at boot.
+void uiSetNetInfo(const char* ip);
+#endif
 #ifdef MANGO_UI
 // Latest model health for the dashboard's mascot row; cached until the next call.
 void uiSetModelStatus(const ModelStatus& s);

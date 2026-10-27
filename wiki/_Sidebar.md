@@ -14,6 +14,7 @@
 - [LilyGo T-Display S3](LilyGo-T-Display-S3)
 - [LilyGo T8 ESP32-S2](LilyGo-T8-ESP32-S2)
 - [CrowPanel Advance 3.5"](CrowPanel-Advance-35)
+- [CrowPanel 3.5" (ESP32)](CrowPanel-35)
 - [Mini ESP32-S3 3.5"](Mini-ESP32-S3-35)
 - [T-Display S3 AMOLED](LilyGo-T-Display-S3-AMOLED)
 - [TTGO T-Display](TTGO-T-Display-ESP32)

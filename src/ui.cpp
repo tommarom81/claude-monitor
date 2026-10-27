@@ -305,7 +305,7 @@ void uiDashboardClock(const UsageData& data, unsigned long lastFetchMs, int rssi
   #define TS(n) ((n) * 2)
   #define SX(n) ((n) * 2)
   #define SY(n) ((n) * 2)
-#elif defined(BOARD_CROWPANEL_ADV_35) || defined(BOARD_MINI_S3_35)
+#elif defined(BOARD_CROWPANEL_ADV_35) || defined(BOARD_CROWPANEL_35) || defined(BOARD_MINI_S3_35)
   // 480x320 panel — 2x font, with coordinates stretched to fill the whole screen
   // (~2x across, ~2.37x down) so the dashboard spreads over the full height
   // instead of bunching up at the top.
@@ -318,7 +318,7 @@ void uiDashboardClock(const UsageData& data, unsigned long lastFetchMs, int rssi
   #define SY(n) (n)
 #endif
 
-#if defined(BOARD_CROWPANEL_ADV_35) || defined(DUST_UI)
+#if defined(BOARD_CROWPANEL_ADV_35) || defined(BOARD_CROWPANEL_35) || defined(DUST_UI)
 // The CrowPanel's ILI9488 is too slow to clear-then-redraw on screen without flicker,
 // and the T-Display S3's v3 screen carousel would flash on every transition.
 // The dashboard (and the S3's other screens) render into an off-screen sprite (PSRAM)
@@ -408,6 +408,14 @@ void uiApplyRotation(bool flipped) {
 // live outside the DUST_UI block below: drawStatusPanel()/uiBlinkTick() are
 // MANGO_UI-only, not DUST_UI-only, and mini-s3-35 is MANGO_UI without DUST_UI.
 static uint8_t s_mdlMask = 0x0F;
+
+#if defined(BOARD_CROWPANEL_ADV_35) || defined(BOARD_CROWPANEL_35)
+// CrowPanel has no header label/URL alternation (no web panel, no DUST_UI) —
+// just the LAN IP shown in place of the static "CLAUDE USAGE" label once known,
+// cached at boot (WiFi.localIP() doesn't change without a reconnect).
+static char s_cpIp[40] = "";
+void uiSetNetInfo(const char* ip) { strlcpy(s_cpIp, ip, sizeof(s_cpIp)); }
+#endif
 
 #ifdef DUST_UI
 // The header's left text alternates between the device label and the panel URL
@@ -677,7 +685,7 @@ void uiBlinkTick(bool closed) {
         if (s_mdlMask & (1 << i)) anyDown = anyDown || !up[i];
     if (!s_modelStatus.ok || anyDown) return;
 
-#if defined(BOARD_CROWPANEL_ADV_35) || defined(DUST_UI)
+#if defined(BOARD_CROWPANEL_ADV_35) || defined(BOARD_CROWPANEL_35) || defined(DUST_UI)
     auto& g = dashTarget();
 #else
     auto& g = lcd;
@@ -1504,7 +1512,7 @@ void uiSetupScreen(const char* apName, const char* apPass, bool reconfigure) {
 }
 
 void uiPinScreen(int pos, const int digits[4]) {
-#ifdef BOARD_CROWPANEL_ADV_35
+#if defined(BOARD_CROWPANEL_ADV_35) || defined(BOARD_CROWPANEL_35)
     auto& g = dashTarget();
     g.fillSprite(C_BG);
 #else
@@ -1579,7 +1587,7 @@ void uiPinScreen(int pos, const int digits[4]) {
     g.setTextColor(0x4A49, C_BG);
     g.print("short tap = A    long press = B");
     halFlush();
-#elif defined(BOARD_CROWPANEL_ADV_35)
+#elif defined(BOARD_CROWPANEL_ADV_35) || defined(BOARD_CROWPANEL_35)
     // Touch HMI — stack the hints vertically; the side-by-side layout overflows at this scale.
     g.print("tap LEFT  = next digit");
     g.setCursor(SX(20), SY(110));
@@ -1658,7 +1666,7 @@ void uiConnecting(const char* ssid, int attempt) {
 }
 
 void uiDashboard(const UsageData& data, unsigned long lastFetchMs, int rssi, int batPct) {
-#if defined(BOARD_CROWPANEL_ADV_35) || defined(DUST_UI)
+#if defined(BOARD_CROWPANEL_ADV_35) || defined(BOARD_CROWPANEL_35) || defined(DUST_UI)
     auto& g = dashTarget();
     g.fillSprite(C_BG);
 #else
@@ -1674,7 +1682,11 @@ void uiDashboard(const UsageData& data, unsigned long lastFetchMs, int rssi, int
     g.setTextColor(C_TEXT, C_HEAD);
     g.setTextSize(TS(1));
     g.setCursor(SX(4), SY(5));
+#if defined(BOARD_CROWPANEL_ADV_35) || defined(BOARD_CROWPANEL_35)
+    g.print(s_cpIp[0] ? s_cpIp : "CLAUDE USAGE");
+#else
     g.print("CLAUDE USAGE");
+#endif
 #endif
 
     unsigned long ago = (millis() - lastFetchMs) / 1000;
@@ -1757,7 +1769,7 @@ void uiDashboard(const UsageData& data, unsigned long lastFetchMs, int rssi, int
 
 void uiDashboardClock(const UsageData& data, unsigned long lastFetchMs, int rssi) {
     if (!data.ok) return;   // error layout is owned by the full uiDashboard
-#if defined(BOARD_CROWPANEL_ADV_35) || defined(DUST_UI)
+#if defined(BOARD_CROWPANEL_ADV_35) || defined(BOARD_CROWPANEL_35) || defined(DUST_UI)
     auto& g = dashTarget();   // update the retained sprite, then push it once
 #else
     auto& g = lcd;

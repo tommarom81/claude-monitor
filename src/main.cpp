@@ -253,6 +253,10 @@ static void netPhaseLegacy() {
     uiBootProgress(90, "Syncing time...");
     syncTime();
     settingsApplyTZ(g_settings.tzMin);
+
+#if defined(BOARD_CROWPANEL_ADV_35) || defined(BOARD_CROWPANEL_35)
+    uiSetNetInfo(WiFi.localIP().toString().c_str());
+#endif
 }
 #endif
 

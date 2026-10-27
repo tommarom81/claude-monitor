@@ -71,6 +71,14 @@ BOARDS3D = {
         back=(el("shield", 55, 35, 40, 30) + el("antz", 12, 12, 26, 10)
               + el("usbp", 4, 43, 8, 14) + pins(140, [20, 34, 48, 62, 76])),
     ),
+    "crowpanel-35": dict(
+        w=150, h=100, d=12, pcb="#1f3a5f", pcbe="#13243b",
+        front=(el("scr", 10, 8, 130, 84)
+               + el("bar", 24, 26, 88, 7) + el("bar d2", 24, 42, 58, 7)
+               + pdots(24, 72, 4, 6, 12)),
+        back=(el("shield", 55, 35, 40, 30) + el("antz", 12, 12, 26, 10)
+              + el("usbp", 4, 43, 8, 14) + pins(140, [20, 34, 48, 62, 76])),
+    ),
     "tdisplay-s3-amoled": dict(
         w=160, h=44, d=8, pcb="#26221c", pcbe="#17130e",
         front=(el("scr", 26, 6, 110, 32)
@@ -107,6 +115,7 @@ BOARDS = [
     ("tdisplay-s3", "LilyGo T-Display S3", "ESP32-S3", '1.9&Prime; 320&times;170', ("&#10024; Dust &middot; tier L", True), "ESP32-S3", "3.0.3"),
     ("t8-s2", "LilyGo T8 ESP32-S2", "ESP32-S2", '1.14&Prime; 135&times;240', ("Clarity v1", False), "ESP32-S2", "1.0.0"),
     ("crowpanel-adv-35", "CrowPanel Advance 3.5&Prime;", "ESP32-S3", '3.5&Prime; 480&times;320 touch', ("Clarity v1", False), "ESP32-S3", "1.0.0"),
+    ("crowpanel-35", "CrowPanel 3.5&Prime; (ESP32)", "ESP32-WROVER", '3.5&Prime; 480&times;320 touch', ("Clarity v1", False), "ESP32", "1.0.0"),
     ("tdisplay-s3-amoled", "T-Display S3 AMOLED", "ESP32-S3", '1.91&Prime; 240&times;536', ("Clarity v1", False), "ESP32-S3", "1.0.0"),
     ("tdisplay-esp32", "TTGO T-Display", "ESP32", '1.14&Prime; 135&times;240', ("Clarity v1", False), "ESP32", "1.0.0"),
     ("esp32c3-oled", "ESP32-C3-OLED", "ESP32-C3", '0.42&Prime; 72&times;40 OLED', ("Clarity v1", False), "ESP32-C3", "1.0.0"),

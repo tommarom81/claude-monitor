@@ -1,6 +1,6 @@
 # Supported boards
 
-Nine boards run the firmware today. Each has its own guide with pinouts, controls, and quirks — click the name.
+Ten boards run the firmware today. Each has its own guide with pinouts, controls, and quirks — click the name.
 
 | Board | MCU | Display | Firmware | PlatformIO env | Buy |
 | ----- | --- | ------- | -------- | -------------- | --- |
@@ -9,6 +9,7 @@ Nine boards run the firmware today. Each has its own guide with pinouts, control
 | [LilyGo T-Display S3](LilyGo-T-Display-S3) | ESP32-S3 | 1.9" 320×170 LCD | ✨ **Dust (v3.0.3)** · tier L | `tdisplay-s3` | [AliExpress](https://s.click.aliexpress.com/e/_c4rvB1Mv) |
 | [LilyGo T8 ESP32-S2](LilyGo-T8-ESP32-S2) | ESP32-S2 | 1.14" 135×240 LCD | Clarity (v1) | `t8-s2` | [AliExpress](https://s.click.aliexpress.com/e/_c2w1HnpJ) |
 | [Elecrow CrowPanel Advance 3.5"](CrowPanel-Advance-35) | ESP32-S3 | 3.5" 480×320 IPS touch | Clarity (v1) | `crowpanel-adv-35` | [AliExpress](https://s.click.aliexpress.com/e/_c4lDErmN) |
+| [Elecrow CrowPanel 3.5" (ESP32)](CrowPanel-35) | ESP32 | 3.5" 480×320 IPS touch (resistive) | Clarity (v1) | `crowpanel-35` | — |
 | [Mini ESP32-S3 3.5" (AXS15231B)](Mini-ESP32-S3-35) | ESP32-S3 | 3.5" 480×320 IPS touch (QSPI) | Clarity (v1) | `mini-s3-35` | — |
 | [LilyGo T-Display S3 AMOLED 1.91"](LilyGo-T-Display-S3-AMOLED) | ESP32-S3 | 1.91" 240×536 AMOLED | Clarity (v1) | `tdisplay-s3-amoled` | [AliExpress](https://s.click.aliexpress.com/e/_c3XNB9Hx) |
 | [TTGO T-Display ESP32](TTGO-T-Display-ESP32) | ESP32 | 1.14" 135×240 LCD | Clarity (v1) | `tdisplay-esp32` | [AliExpress](https://s.click.aliexpress.com/e/_c32HlGQ1) |
@@ -35,6 +36,7 @@ Not every board can do everything. These limits come from the hardware, not the 
 | TTGO T-Display | ✅ | ✅ | Two buttons |
 | LilyGo T8 ESP32-S2 | ❌ | ❌ | One button (short tap / long press) |
 | CrowPanel Advance 3.5" | ❌ | ❌ | Touch zones instead of buttons |
+| CrowPanel 3.5" (ESP32) | ❌ | ❌ | Touch zones instead of buttons (resistive) |
 | Mini ESP32-S3 3.5" (AXS15231B) | ❌ | ❌ | Touch zones instead of buttons |
 | T-Display S3 AMOLED | varies | ✅ | Button B needs a touch-equipped variant |
 | ESP32-C3-OLED | ❌ | ✅ | You wire the buttons yourself |
