@@ -44,3 +44,7 @@ Thumbs.db
 # Personal photos (show home WiFi SSID / IP / bookmarks)
 Pictures/WhatsApp Image *
 Pictures/Pic 2.png
+
+# Local secrets: MQTT broker login, OTA password, OTA upload env
+src/mqtt_local.h
+platformio_local.ini

@@ -33,6 +33,7 @@
 #include "history.h"
 #include "history_mini.h"
 #include "news.h"
+#include "mqtt_ha.h"
 #ifdef MANGO_UI
 #include "status.h"
 #endif
@@ -331,6 +332,7 @@ void setup() {
         snprintf(ip, sizeof(ip), "%s", WiFi.localIP().toString().c_str());
         screensMiniInit(ip);
     }
+    mqttHaBegin();
 #endif
 #endif
 
@@ -369,6 +371,14 @@ void loop() {
         bool aHeld = halBtnAIsPressed();
         bool bHeld = halBtnBIsPressed();
 
+        // Backlight switched off from Home Assistant: the first tap anywhere only
+        // wakes it. The edge is swallowed (aDownAt/bDownAt stay 0), so neither
+        // the release nor a hold acts on a screen the user couldn't see.
+        if ((aEdge || bEdge) && mqttHaScreenOff()) {
+            mqttHaWake();
+            aEdge = bEdge = false;
+        }
+
         if (aEdge) { aDownAt = millis(); aLong = false; }
         if (aDownAt) {
             if (!aLong && aHeld && millis() - aDownAt >= 600) {
@@ -376,6 +386,7 @@ void loop() {
                 g_settings.brightness = (g_settings.brightness + 1) % 4;
                 halSetBrightness(g_settings.brightness);
                 settingsPutInt("brightness", g_settings.brightness);
+                mqttHaOnPresetBrightness(g_settings.brightness);
             }
             if (!aHeld) {
                 if (!aLong) screensMiniPrev();
@@ -493,6 +504,7 @@ void loop() {
 
 #if defined(BOARD_MINI_S3_35)
     screensMiniTick();                    // 10s ago-timer header beat
+    mqttHaLoop();                         // HA screen control + OTA (no-op without mqtt_local.h)
 #elif defined(DUST_UI)
     screensTick();                        // carousel dwell + 10s header beat + clock minute
     if (newsTick()) screensOnNews();      // blocks 2-5s only when a fetch is due

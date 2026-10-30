@@ -54,5 +54,9 @@ bool halBtnAIsPressed();
 bool halBtnBIsPressed();
 int  halBatPercent();
 void halSetBrightness(uint8_t level);
+#if defined(BOARD_MINI_S3_35)
+uint8_t halBrightnessPwm(uint8_t level);   // the 4 preset steps as raw PWM
+void    halSetBacklightPwm(uint8_t pwm);   // raw 0..255, 0 = fully dark
+#endif
 void halFlush();
 void halClear(uint16_t color);

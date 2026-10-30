@@ -482,10 +482,17 @@ void halSetBrightness(uint8_t level) {
     // brightness cycle is a long-press on a touch zone, so a dark panel hides
     // the very control needed to undo it, and the value survives in NVS across
     // a reflash. The boards whose 0 step is safe have real buttons and a
-    // battery to save.
-    static const uint8_t vals[] = {24, 60, 160, 255};
-    ledcWrite(0, vals[level > 3 ? 3 : level]);
+    // battery to save. (A true off does exist via MQTT — see mqtt_ha.cpp —
+    // where Home Assistant can always switch it back on and a tap wakes it.)
+    ledcWrite(0, halBrightnessPwm(level));
 }
+
+uint8_t halBrightnessPwm(uint8_t level) {
+    static const uint8_t vals[] = {24, 60, 160, 255};
+    return vals[level > 3 ? 3 : level];
+}
+
+void halSetBacklightPwm(uint8_t pwm) { ledcWrite(0, pwm); }
 
 void halFlush() {
     uint16_t *src = (uint16_t *)spr.getPointer();
